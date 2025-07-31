@@ -4,20 +4,12 @@ import { getDatabase, ref, get, update } from "firebase/database";
 import { Link } from "react-router-dom";
 import NavbarLocksense from "./component/Navbar";
 import FooterLocksense from "./component/Footer";
-import forge from "node-forge";
-import MD5 from "crypto-js/md5";
 
 export default function EditUserForm() {
   const location = useLocation();
   const { userId, room, roomData } = location.state || {};
   const [nama, setNama] = useState("");
   const [noHp, setNoHp] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [publicKeyPem, setPublicKeyPem] = useState(null);
-  const [privateKeyPem, setPrivateKeyPem] = useState(null);
-
   const [notification, setNotification] = useState({ message: "", type: "" });
   const [showNotif, setShowNotif] = useState(false);
 
@@ -26,27 +18,7 @@ export default function EditUserForm() {
       setNama(roomData.penghuni.nama || "");
       setNoHp(roomData.penghuni.no_hp || "");
     }
-
-    const db = getDatabase();
-    const userRef = ref(db, `users/${userId}`);
-
-    get(userRef)
-      .then((snapshot) => {
-        if (snapshot.exists()) {
-          const user = snapshot.val();
-          setUsername(user.username || "");
-          setPassword("");
-
-          if (user.rsaKeys) {
-            setPublicKeyPem(user.rsaKeys.public);
-            setPrivateKeyPem(user.rsaKeys.private);
-          }
-        }
-      })
-      .catch((error) => {
-        console.error("Gagal mengambil data user:", error);
-      });
-  }, [roomData, userId]);
+  }, [roomData]);
 
   const showNotification = (message, type) => {
     setNotification({ message, type });
@@ -56,56 +28,13 @@ export default function EditUserForm() {
 
   const handleUpdate = async () => {
     try {
-      if (!publicKeyPem || !privateKeyPem) {
-        showNotification("RSA keys belum siap, coba lagi.", "error");
-        return;
-      }
-
-      if (password.length > 0 && password.length < 8) {
-        showNotification("Password minimal 8 karakter.", "error");
-        return;
-      }
-
       const db = getDatabase();
-
-      // Update data penghuni (nama, no_hp)
       await update(ref(db, `users/${userId}/rooms/${room}/penghuni`), {
         nama,
         no_hp: noHp,
       });
 
-      // Update username dan password jika diisi
-      const updateData = { username };
-
-      if (password.length >= 8) {
-        const keypair = forge.pki.rsa.generateKeyPair({
-          bits: 2048,
-          e: 0x10001,
-        });
-
-        const publicPem = forge.pki.publicKeyToPem(keypair.publicKey);
-        const privatePem = forge.pki.privateKeyToPem(keypair.privateKey);
-
-        updateData.rsaKeys = {
-          public: publicPem,
-          private: privatePem,
-        };
-
-        // Hash password dengan MD5
-        const hashedPassword = MD5(password).toString();
-        updateData.password = hashedPassword;
-      }
-
-      await update(ref(db, `users/${userId}`), updateData);
-
       showNotification("Data berhasil diperbarui!", "success");
-      setPassword("");
-      setPublicKeyPem(
-        updateData.rsaKeys ? updateData.rsaKeys.public : publicKeyPem
-      );
-      setPrivateKeyPem(
-        updateData.rsaKeys ? updateData.rsaKeys.private : privateKeyPem
-      );
     } catch (err) {
       console.error("Gagal update:", err);
       showNotification("Gagal update data!", "error");
@@ -115,26 +44,16 @@ export default function EditUserForm() {
   const handleSetDefault = async () => {
     try {
       const db = getDatabase();
-
       const defaultNama = "User";
       const defaultNoHp = "";
-      const defaultUsername = "User";
-      const defaultPassword = MD5("User").toString();
 
       await update(ref(db, `users/${userId}/rooms/${room}/penghuni`), {
         nama: defaultNama,
         no_hp: defaultNoHp,
       });
 
-      await update(ref(db, `users/${userId}`), {
-        username: defaultUsername,
-        password: defaultPassword,
-      });
-
       setNama(defaultNama);
       setNoHp(defaultNoHp);
-      setUsername(defaultUsername);
-      setPassword(""); // Clear input
 
       showNotification("Data di-set ke default!", "success");
     } catch (error) {
@@ -202,58 +121,10 @@ export default function EditUserForm() {
             />
           </div>
 
-          <div className="form-group">
-            <label>Username:</label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => {
-                const input = e.target.value;
-                if (input.trim().split(/\s+/).length <= 16) {
-                  setUsername(input);
-                }
-              }}
-              onBlur={() => {
-                if (username.trim().split(/\s+/).length > 16) {
-                  showNotification(
-                    "Username tidak boleh lebih dari 16 kata.",
-                    "error"
-                  );
-                }
-              }}
-              placeholder="Masukkan username"
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Password:</label>
-            <div className="password-group">
-              <input
-                type={showPassword ? "text" : "password"}
-                value={password}
-                onChange={(e) => {
-                  if (e.target.value.length <= 16) {
-                    setPassword(e.target.value);
-                  }
-                }}
-                placeholder="Masukkan password baru (kosongkan jika tidak ingin ganti)"
-                autoComplete="new-password"
-              />
-              <span
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-              >
-                {showPassword ? "Sembunyikan" : "Tampilkan"}
-              </span>
-            </div>
-            {password.length > 0 && password.length < 8 && (
-              <p style={{ color: "red" }}>Password minimal 8 karakter</p>
-            )}
-          </div>
-
           <button className="submit-button" onClick={handleUpdate}>
             Simpan
           </button>
+
           <div style={{ marginTop: "10px" }}>
             <button className="submit-button" onClick={handleSetDefault}>
               Pengaturan Awal

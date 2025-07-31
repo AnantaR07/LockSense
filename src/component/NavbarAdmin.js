@@ -25,35 +25,43 @@ export default function NavbarLocksense() {
           showConfirmButton: false,
         });
         setTimeout(() => {
-          navigate("/loginadmin"); // Ganti rute sesuai kebutuhan
+          navigate("/loginadmin");
         }, 1500);
       }
     });
   };
+
   return (
     <>
       <nav className="navbar">
-        <div className="logo">
+        <div className="navbar-left">
           <img src="/img/logo.png" alt="Logo" className="logo-img" />
+          <span className="navbar-title">Dashboard Admin</span>
         </div>
 
         <button className="logout-button" onClick={handleLogout}>
           <i className="fas fa-sign-out-alt" />
-          <span className="text">Logout</span>
+          <span>Logout</span>
         </button>
       </nav>
 
       <style jsx>{`
         .navbar {
           display: flex;
-          align-items: center;
           justify-content: space-between;
-          padding: 0.5rem 2rem;
+          align-items: center;
           height: 70px;
+          padding: 0 2rem;
           background: linear-gradient(90deg, #6a11cb 0%, #2575fc 100%);
           color: white;
-          font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
           box-shadow: 0 4px 10px rgba(0, 0, 0, 0.2);
+          font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        .navbar-left {
+          display: flex;
+          align-items: center;
+          gap: 16px;
         }
 
         .logo-img {
@@ -66,23 +74,29 @@ export default function NavbarLocksense() {
           object-fit: cover;
         }
 
+        .navbar-title {
+          font-size: 1.25rem;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+        }
+
         .logout-button {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: white;
+          padding: 8px 16px;
+          background-color: white;
           color: #2575fc;
-          padding: 8px 14px;
           border: none;
           border-radius: 8px;
-          font-weight: 500;
           cursor: pointer;
+          font-weight: 500;
           transition: all 0.3s ease;
-          box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
         }
 
         .logout-button:hover {
-          background: #2575fc;
+          background-color: #2575fc;
           color: white;
           transform: translateY(-2px);
         }

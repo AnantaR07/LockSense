@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import forge from "node-forge";
+import { JSEncrypt } from "jsencrypt";
 import {
   getDatabase,
   ref,
@@ -14,7 +16,6 @@ import { FaEye, FaEyeSlash } from "react-icons/fa";
 import { initializeApp } from "firebase/app";
 import NavbarLocksense from "./component/Navbar";
 import FooterLocksense from "./component/Footer";
-import md5 from "blueimp-md5";
 
 const firebaseConfig = {
   apiKey: "YOUR_API_KEY",
@@ -31,16 +32,9 @@ const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
 const dbRef = ref(db);
 
-const ROOM_API_KEYS = {
-  "Kamar 1": "L8fWqXcA93nPbRtYZ2oML7uEiWvH5kNs",
-  "Kamar 2": "eDkYqZC91pRva0LnTuXgjNBKW74hXsMF",
-  "Kamar 3": "xPNyRmBJqdVAOzT72LWKM5vg0rE9chFs",
-};
-
 export default function RSADashboard() {
   const [selectedRoom, setSelectedRoom] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  const [uidKartu, setUidKartu] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [error, setError] = useState("");
   const [namaPenghuni, setNamaPenghuni] = useState("");
@@ -54,7 +48,7 @@ export default function RSADashboard() {
   const [roomData, setRoomData] = useState(null);
   const [rsaPrivateKey, setRsaPrivateKey] = useState("");
   const [rsaPublicKey, setRsaPublicKey] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [availableRooms, setAvailableRooms] = useState([]);
 
   const formatDateTime = () => {
     const now = new Date();
@@ -66,7 +60,10 @@ export default function RSADashboard() {
 
   const logLoginActivity = async (roomPath) => {
     const logRef = ref(db, `users/${roomPath}/logs`);
-    const newLog = { status: "Login berhasil", waktu: formatDateTime() };
+    const newLog = {
+      status: "Login Website berhasil",
+      waktu: formatDateTime(),
+    };
     const newLogRef = await push(logRef, newLog);
     return { key: newLogRef.key, ...newLog };
   };
@@ -99,23 +96,41 @@ export default function RSADashboard() {
       setNoHpPenghuni("");
     }
   };
+  const generateRandomRSAKeys = () => {
+    const crypt = new JSEncrypt({ default_key_size: 2048 });
+    crypt.getKey();
+
+    const publicKey = crypt.getPublicKey(); // Format PEM yang valid
+    const privateKey = crypt.getPrivateKey(); // Format PEM yang valid
+
+    setRsaPublicKey(publicKey);
+    setRsaPrivateKey(privateKey);
+  };
 
   const fetchRSAKeys = async (uid) => {
     try {
-      const rsaSnapshot = await get(child(dbRef, `users/${uid}/rsaKeys`));
+      const rsaSnapshot = await get(
+        child(dbRef, `users/${uid}/rsaKeys/public`)
+      );
       if (rsaSnapshot.exists()) {
-        const rsaData = rsaSnapshot.val();
-        setRsaPrivateKey(rsaData.private || "");
-        setRsaPublicKey(rsaData.public || "");
-        console.log("RSA Key berhasil diambil:", rsaData);
+        const publicKeyPem = rsaSnapshot.val();
+        console.log("Public RSA Key berhasil diambil:", publicKeyPem);
+        return publicKeyPem;
       } else {
-        console.warn("RSA Key tidak ditemukan di Firebase.");
+        console.warn("Public RSA Key tidak ditemukan di Firebase.");
+        return null;
       }
     } catch (err) {
-      console.error("Gagal mengambil RSA key:", err);
+      console.error("Gagal mengambil public RSA key:", err);
+      return null;
     }
   };
 
+  function encryptWithRSA(publicKeyPem, plainText) {
+    const publicKey = forge.pki.publicKeyFromPem(publicKeyPem);
+    const encrypted = publicKey.encrypt(plainText, "RSA-OAEP");
+    return forge.util.encode64(encrypted); // hasil base64
+  }
   const handleLogin = async () => {
     setError("");
     setIsAuthenticated(false);
@@ -128,6 +143,12 @@ export default function RSADashboard() {
       return;
     }
 
+    if (!uidKartu) {
+      setError("Silakan scan UID kartu terlebih dahulu.");
+      setShowErrorModal(true);
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -135,35 +156,46 @@ export default function RSADashboard() {
       if (!snapshot.exists()) throw new Error("Tidak ada data pengguna.");
       const usersData = snapshot.val();
 
-      const hashedPassword = md5(password); // Gunakan MD5 seperti yang kamu pakai
-
       const foundUserEntry = Object.entries(usersData).find(
         ([, userVal]) =>
-          userVal.username === username &&
-          userVal.password === hashedPassword &&
+          userVal.uid === uidKartu &&
           userVal.rooms &&
           userVal.rooms[selectedRoom]
       );
 
       if (!foundUserEntry) {
-        throw new Error("Username, password, atau kamar salah.");
+        throw new Error("UID tidak valid atau tidak memiliki akses ke kamar.");
       }
 
       const [userKey, userData] = foundUserEntry;
 
       await fetchPenghuniData(userKey, selectedRoom);
-      await fetchRSAKeys(userKey);
+      const rsaPublic = await fetchRSAKeys(userKey);
+      if (!rsaPublic) {
+        throw new Error("Public RSA key tidak ditemukan.");
+      }
 
-      const newLog = await logLoginActivity(`${userKey}/rooms/${selectedRoom}`);
+      // 🔐 Enkripsi log menggunakan RSA Public Key
+      const waktuSekarang = formatDateTime();
+      const plaintextLog = `UID: ${uidKartu}, Room: ${selectedRoom}, Time: ${waktuSekarang}`;
+      const encryptedLog = encryptWithRSA(rsaPublic, plaintextLog);
+
+      // 🚀 Simpan log terenkripsi ke Firebase
+      const logRef = ref(db, `users/${userKey}/rooms/${selectedRoom}/logs`);
+      const newLogRef = await push(logRef, {
+        status: "Login berhasil",
+        waktu: waktuSekarang,
+      });
+
       const updatedRoomData = await fetchRoomData(userKey, selectedRoom);
       setRoomData(updatedRoomData);
 
       const updatedRooms = { ...userData.rooms };
       if (!updatedRooms[selectedRoom].logs)
         updatedRooms[selectedRoom].logs = {};
-      updatedRooms[selectedRoom].logs[newLog.key] = {
-        status: newLog.status,
-        waktu: newLog.waktu,
+      updatedRooms[selectedRoom].logs[newLogRef.key] = {
+        status: "Login berhasil",
+        waktu: waktuSekarang,
       };
 
       setRoom(selectedRoom);
@@ -171,10 +203,12 @@ export default function RSADashboard() {
       setUserRooms(updatedRooms);
       setCurrentRoomData(updatedRoomData);
       setIsAuthenticated(true);
-      await update(ref(db, `users/${userKey}/rooms`), {
+
+      await update(ref(db, `users/${userKey}/rooms/${selectedRoom}`), {
         status_pintu: "terbuka",
       });
     } catch (err) {
+      console.error("Login error:", err);
       setError(err.message || "Terjadi kesalahan saat login.");
       setShowErrorModal(true);
     } finally {
@@ -199,17 +233,47 @@ export default function RSADashboard() {
     }
   }, [isAuthenticated, userId, selectedRoom]);
 
+  useEffect(() => {
+    const fetchRooms = async () => {
+      try {
+        const snapshot = await get(child(dbRef, "users"));
+        if (snapshot.exists()) {
+          const users = snapshot.val();
+          const roomsList = [];
+
+          Object.entries(users).forEach(([userId, userData]) => {
+            if (userData.rooms) {
+              Object.entries(userData.rooms).forEach(([roomName, roomData]) => {
+                if (
+                  typeof roomData === "object" &&
+                  roomData !== null &&
+                  !Array.isArray(roomData)
+                ) {
+                  roomsList.push({ name: roomName, userId });
+                }
+              });
+            }
+          });
+
+          setAvailableRooms(roomsList);
+        }
+      } catch (error) {
+        console.error("Gagal mengambil daftar kamar:", error);
+      }
+    };
+
+    fetchRooms();
+  }, []);
+
   const getLatestLogs = () => {
     if (!currentRoomData?.logs) return [];
 
     const parseIndoDate = (waktuString) => {
-      // Contoh: "Jumat, 30/5/2025 - 05.29.50"
       const regex = /(\d{1,2})\/(\d{1,2})\/(\d{4}) - (\d{2})\.(\d{2})\.(\d{2})/;
       const match = waktuString.match(regex);
-      if (!match) return new Date(0); // fallback jika gagal parsing
+      if (!match) return new Date(0);
 
       const [, day, month, year, hour, minute, second] = match;
-      // Format ke ISO: YYYY-MM-DDTHH:MM:SS
       const isoString = `${year}-${month.padStart(2, "0")}-${day.padStart(
         2,
         "0"
@@ -223,8 +287,8 @@ export default function RSADashboard() {
         ...log,
         waktuDate: parseIndoDate(log.waktu),
       }))
-      .sort((a, b) => b.waktuDate - a.waktuDate) // urutkan dari terbaru
-      .slice(0, 6); // ambil 6 data terbaru
+      .sort((a, b) => b.waktuDate - a.waktuDate)
+      .slice(0, 6);
   };
 
   const handleClick = () => {
@@ -233,19 +297,8 @@ export default function RSADashboard() {
   };
 
   const handleLogout = async () => {
-    if (userId && selectedRoom) {
-      try {
-        await update(ref(db, `users/${userId}/rooms`), {
-          status_pintu: "tertutup",
-        });
-      } catch (err) {
-        console.error("Gagal mengubah status_pintu saat logout:", err);
-      }
-    }
-
     setIsAuthenticated(false);
-    setUsername("");
-    setPassword("");
+    setUidKartu("");
     setSelectedRoom("");
     setError("");
     setNamaPenghuni("");
@@ -260,7 +313,7 @@ export default function RSADashboard() {
   return (
     <div className="dashboard-container">
       <NavbarLocksense />
-      <main class="content">
+      <main className="content">
         <header className="dashboard-header">
           <h1>RSA Security Dashboard</h1>
           <p>Pantau keamanan setiap kamar secara real-time.</p>
@@ -268,13 +321,9 @@ export default function RSADashboard() {
           <div className="dropdown-container">
             <div className="room-select-container">
               <select
-                id="room-select"
                 value={selectedRoom}
                 onChange={(e) => {
                   setSelectedRoom(e.target.value);
-                  // Reset state saat ganti kamar
-                  setUsername("");
-                  setPassword("");
                   setIsAuthenticated(false);
                   setError("");
                   setUserRooms({});
@@ -282,70 +331,31 @@ export default function RSADashboard() {
                   setUserId(null);
                 }}
               >
-                <option value="">-- Pilih Kamar --</option>
-                {Object.keys(ROOM_API_KEYS).map((room) => (
-                  <option key={room} value={room}>
-                    {room}
+                <option value="">Pilih kamar</option>
+                {availableRooms.map((room, index) => (
+                  <option key={index} value={room.name}>
+                    {room.name}
                   </option>
                 ))}
               </select>
             </div>
           </div>
 
-          {/* Form Login hanya tampil jika sudah memilih kamar dan belum authenticated */}
           {!isAuthenticated && selectedRoom && (
             <div className="login-container">
               <input
                 type="text"
-                placeholder="Username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Scan UID Kartu"
+                value={uidKartu}
+                onChange={(e) => setUidKartu(e.target.value)}
                 disabled={isLoading}
               />
-              <div
-                style={{
-                  position: "relative",
-                  width: "100%",
-                }}
-              >
-                <input
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isLoading}
-                  style={{
-                    width: "100%",
-                    paddingRight: "40px",
-                    padding: "8px",
-                    boxSizing: "border-box",
-                  }}
-                />
-                <span
-                  onClick={() => setShowPassword(!showPassword)}
-                  style={{
-                    position: "absolute",
-                    right: "10px",
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    cursor: "pointer",
-                    color: "#555",
-                  }}
-                >
-                  {showPassword ? <FaEyeSlash /> : <FaEye />}
-                </span>
-              </div>
-
               <button onClick={handleLogin} disabled={isLoading}>
-                {isLoading ? "Memproses..." : "Login"}
+                {isLoading ? "Memproses..." : "Login dengan UID"}
               </button>
-              {/* Error tampil di modal */}
-              {/* Kalau tetap mau error inline bisa uncomment ini */}
-              {/* {error && <div className="error">{error}</div>} */}
             </div>
           )}
 
-          {/* Tampilkan data kamar jika sudah login */}
           {isAuthenticated && currentRoomData && (
             <div className="dashboard-content">
               <div className="penghuni-info">
@@ -362,7 +372,6 @@ export default function RSADashboard() {
                 state={{
                   nama: namaPenghuni,
                   nohp: noHpPenghuni,
-                  username,
                   userId,
                   room: selectedRoom,
                   roomData,
@@ -400,7 +409,40 @@ export default function RSADashboard() {
           )}
         </header>
 
-        {/* Modal error */}
+        <section className="locksense-container">
+          <div className="locksense-content">
+            <div className="text-section">
+              <h2 className="locksense-title">Apa Itu LockSense?</h2>
+              <p className="locksense-description">
+                <strong>LockSense</strong> adalah sistem pengunci kamar otomatis
+                berbasis IoT yang memungkinkan pintu terbuka saat pengguna
+                berhasil login dengan UID kartu. Sistem ini dilengkapi dengan
+                keamanan <strong>RSA encryption</strong>.
+              </p>
+              <p className="locksense-description">
+                LockSense diterapkan di <strong>KOS PUTRI BUMI INDAH</strong>{" "}
+                sebagai lokasi uji coba dan penelitian.
+              </p>
+            </div>
+            <div className="image-section">
+              <iframe
+                title="Lokasi Kos Putri Bumi Indah"
+                src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d15929.202523061013!2d104.4479588057716!3d0.9142804043519848!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x31cf445d93120f6d%3A0xe85fc8e296d78f53!2sJl.%20Bumi%20Indah%2C%20Air%20Raja%2C%20Kec.%20Tanjungpinang%20Tim.%2C%20Kota%20Tanjung%20Pinang%2C%20Kepulauan%20Riau!5e0!3m2!1sid!2sid!4v1719152425761!5m2!1sid!2sid"
+                width="100%"
+                height="300"
+                style={{ border: "1px solid #ccc", borderRadius: "12px" }}
+                allowFullScreen=""
+                loading="lazy"
+                referrerPolicy="no-referrer-when-downgrade"
+              ></iframe>
+              <p className="caption">
+                Lokasi: Jl. Bumi Indah No.20 Blok C, Air Raja, Tanjungpinang
+                Timur
+              </p>
+            </div>
+          </div>
+        </section>
+
         {showErrorModal && (
           <div
             className="modal-overlay"
@@ -674,6 +716,63 @@ export default function RSADashboard() {
   background-color:rgb(255, 255, 255); /* merah muda lembut */
   transform: scale(1.02); /* sedikit membesar saat hover */
   box-shadow: 0 6px 10px rgba(0, 0, 0, 0.15);
+}
+.locksense-container {
+  padding: 50px 20px;
+  background: linear-gradient(to right, #ffffff, #f5f7fa);
+  border-radius: 10px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+  max-width: 1100px;
+  margin: 40px auto;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.locksense-content {
+  display: flex;
+  flex-direction: row;
+  gap: 40px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.text-section {
+  flex: 1 1 50%;
+}
+
+.image-section {
+  flex: 1 1 45%;
+  text-align: center;
+}
+
+.locksense-title {
+  font-size: 32px;
+  margin-bottom: 20px;
+  color: #2d3e50;
+  font-weight: bold;
+}
+
+.locksense-description {
+  font-size: 16px;
+  line-height: 1.8;
+  color: #4a4a4a;
+  margin-bottom: 16px;
+  text-align: justify;
+}
+
+.locksense-image {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.1);
+  border: 1px solid #ddd;
+}
+
+.caption {
+  margin-top: 10px;
+  font-size: 14px;
+  color: #888;
+  font-style: italic;
 }
 
 
