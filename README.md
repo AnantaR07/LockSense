@@ -20,3 +20,5 @@ This system combines frontend web technologies with IoT hardware (e.g., ESP32 an
 - ESP32 (IoT Microcontroller)  
 - RFID Reader + Servo  
 - RSA Encryption (Client-side or via microcontroller logic)
+
+---
